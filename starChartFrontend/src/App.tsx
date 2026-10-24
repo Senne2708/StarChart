@@ -11,6 +11,7 @@ const PAGE_EMOJIS: Record<string, string> = {
   home: "🏠",
   leaderboard: "🏆",
   student: "🎓",
+  
 };
 
 export default function App() {
