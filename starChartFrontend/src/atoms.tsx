@@ -14,9 +14,13 @@ export type Teacher = {
 
 export type Activity = {
   id: string;
-  title: string;
-  isActive: boolean;
-
+  studentId: string;
+  studentName: string;
+  teacherName: string;
+  stars: number;
+  reward?: string;   // optional — not every award has one (e.g. "Sweets")
+  time: string;
+  
 };
 
 
