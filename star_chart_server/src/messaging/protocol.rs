@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::database::temp_database::{Activity, Student, Teacher};
+use crate::database::{Activities, Student, Teacher};
 
 // Client to Server
 
@@ -19,15 +19,13 @@ pub enum ClientMsgType {
     GetActivities,
 
     AddActivity {
-        student_id: usize,
-        teacher_id: usize,
+        student_id: i64,
+        teacher_id: i64,
+        reward_description: String,
         star_diff: i16,
     },
     AddStudent {
         student_name: String,
-    },
-    AddTeacher {
-        teacher_name: String,
     },
 }
 
@@ -46,10 +44,9 @@ pub enum ServerMsgType {
 
     Students(Vec<Student>),
     Teachers(Vec<Teacher>),
-    Activities(Vec<Activity>),
+    Activities(Vec<Activities>),
 
     StudentAdded(Student),
-    TeacherAdded(Teacher),
 
-    ActivityAdded { activity: Activity, student: Student },
+    ActivityAdded { activity: Activities, student: Student },
 }

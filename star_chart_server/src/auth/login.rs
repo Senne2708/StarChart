@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AppState, auth::{
-        jwt_token::create_jwt, password::{self, hash_password, verify_password},
-    },
+        jwt_token::create_jwt, password::{hash_password, verify_password},
+    }, database::db_error,
 };
 
 #[derive(Deserialize)]
@@ -35,13 +35,14 @@ pub async fn login_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<LoginPayload>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
-    let stored_hash = {
-        let store = state.store.lock().unwrap();
-        store.get_user(&payload.username).cloned()
-    };
 
-    let user_exists = stored_hash.is_some();
-    let hash = stored_hash.unwrap_or_else(|| DUMMY_HASH.clone());
+    let user = state.db.teachers
+        .get_password_hash(&payload.username)
+        .await
+        .map_err(db_error)?;
+
+    let user_exists = user.is_some();
+    let hash = user.unwrap_or_else(|| DUMMY_HASH.clone());
     let password = payload.password;
 
     let password_ok = tokio::task::spawn_blocking(move || verify_password(&password, &hash))
@@ -71,13 +72,19 @@ pub async fn create_login_handler(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-
     if password_ok {
-        let mut store = state.store.lock().unwrap();
-        store.add_user(&payload.username, &payload.password);
+        let hashed_password = tokio::task::spawn_blocking(move || hash_password(&payload.password))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        state.db.teachers.create(&payload.username, &hashed_password).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+
         return Ok(StatusCode::OK);
     }
 
-    Ok(StatusCode::UNAUTHORIZED)
+    
 
+    Ok(StatusCode::UNAUTHORIZED)
 }

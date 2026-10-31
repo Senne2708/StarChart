@@ -1,9 +1,8 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use axum::{Router, middleware};
 use axum::routing::{get, post};
 use tokio::sync::broadcast;
-use database::temp_database::Store;
 use messaging::protocol::{ServerMsg};
 
 use crate::auth::auth_middleware::auth_middleware;
@@ -18,11 +17,10 @@ mod auth;
 mod logging;
 
 struct AppState {
-    store: Mutex<Store>,
+    db: database::StarChartDb,
     tx: broadcast::Sender<ServerMsg>,
     jwt: JwtKeys
 }
-
 
 #[tokio::main]
 async fn main() {
@@ -31,9 +29,11 @@ async fn main() {
 
     tracing::info!("Service Starting");
 
+    let db = database::StarChartDb::connect().await;
+
     let (tx, _) = broadcast::channel(50);
     let state = Arc::new(AppState {
-        store: Mutex::new(Store::new()),
+        db,
         tx,
         jwt: JwtKeys::from_env()
     });
