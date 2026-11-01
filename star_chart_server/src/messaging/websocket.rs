@@ -9,7 +9,7 @@ use axum::{
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
-    AppState, auth::password::hash_password, database::{AppDatabaseError, CreateActivity}, messaging::protocol::{ClientMsg, ClientMsgType, ServerMsg, ServerMsgType},
+    AppState, database::{AppDatabaseError, CreateActivity}, messaging::protocol::{ClientMsg, ClientMsgType, ServerMsg, ServerMsgType},
 };
 
 async fn send_json(socket: &mut WebSocket, msg: &ServerMsg) -> Result<(), axum::Error> {
@@ -86,8 +86,8 @@ async fn process(state: &AppState, msg: ClientMsgType) -> ServerMsgType {
         ClientMsgType::GetActivities => handle_get_activities(state).await,
 
         // Changes
-        ClientMsgType::AddStudent { student_name } => {
-            handle_add_student(state, student_name).await
+        ClientMsgType::AddStudent { student_name, key_stage } => {
+            handle_add_student(state, student_name, key_stage ).await
         }
         ClientMsgType::AddActivity {
             student_id,
@@ -133,8 +133,9 @@ async fn handle_get_activities(state: &AppState) -> Result<ServerMsgType, AppDat
 async fn handle_add_student(
     state: &AppState,
     student_name: String,
+    key_stage: String
 ) -> Result<ServerMsgType, AppDatabaseError> {
-    let student = state.db.students.create(&student_name).await?;
+    let student = state.db.students.create(&student_name, &key_stage).await?;
 
     send_broadcast(ServerMsgType::StudentAdded(student.clone()), state);
     Ok(ServerMsgType::StudentAdded(student))

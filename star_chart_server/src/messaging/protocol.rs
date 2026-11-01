@@ -26,6 +26,7 @@ pub enum ClientMsgType {
     },
     AddStudent {
         student_name: String,
+        key_stage: String
     },
 }
 

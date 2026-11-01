@@ -1,6 +1,7 @@
 CREATE TABLE students (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL,
+    ks          TEXT NOT NULL CHECK (ks IN ('ks3', 'ks4')),
     total_stars INTEGER NOT NULL DEFAULT 0
 );
 
