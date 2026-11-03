@@ -1,42 +1,48 @@
-use axum::{Json, http::StatusCode, response::IntoResponse};
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum AppDatabaseError {
-    NotFound { entity: &'static str, id: String},
-    Temp { reason: &'static str },
-    Internal(sqlx::Error),
+    #[error("{entity} not found: {id}")]
+    NotFound { entity: &'static str, id: String },
+
+    #[error("{entity} already exists")]
+    Conflict { entity: &'static str },
+
+    #[error("database error: {0}")]
+    Internal(#[source] sqlx::Error),
+}
+
+impl AppDatabaseError {
+    pub fn not_found(entity: &'static str, id: impl Into<String>) -> Self {
+        Self::NotFound {
+            entity,
+            id: id.into(),
+        }
+    }
+
+    pub fn client_message(&self) -> String {
+        match self {
+            Self::NotFound { entity, id } => format!("{entity} {id} not found"),
+            Self::Conflict { entity } => format!("{entity} already exists"),
+            Self::Internal(_) => "internal error".to_string(),
+        }
+    }
+
+    pub fn conflict_as(self, entity: &'static str) -> Self {
+        match self {
+            Self::Conflict { .. } => Self::Conflict { entity },
+            other => other,
+        }
+    }
 }
 
 impl From<sqlx::Error> for AppDatabaseError {
     fn from(e: sqlx::Error) -> Self {
-        AppDatabaseError::Internal(e)
-    }
-}
-
-impl AppDatabaseError {
-    pub fn client_message(&self) -> String {
-        match self {
-            AppDatabaseError::NotFound { entity, .. } => format!("{entity} not found"),
-            AppDatabaseError::Internal(_) => "internal error".into(),
-            AppDatabaseError::Temp { reason } => format!("Error Reason: {reason}"),
+        if let Some(db) = e.as_database_error() {
+            if db.is_unique_violation() {
+                return Self::Conflict { entity: "record" };
+            }
         }
-    }
-
-    pub fn not_found(entity: &'static str, id: impl Into<String>) -> Self {
-        Self::NotFound { entity, id: id.into() }
-    }
-}
-
-impl IntoResponse for AppDatabaseError {
-    fn into_response(self) -> axum::response::Response {
-        let status = match self {
-            AppDatabaseError::NotFound { .. } => StatusCode::NOT_FOUND,
-            AppDatabaseError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            AppDatabaseError::Temp { .. } => StatusCode::INTERNAL_SERVER_ERROR
-        };
-        if let AppDatabaseError::Internal(e) = &self {
-            tracing::error!(?e, "database error");
-        }
-        (status, Json(serde_json::json!({ "error": self.client_message() }))).into_response()
+        Self::Internal(e)
     }
 }

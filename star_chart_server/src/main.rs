@@ -7,7 +7,7 @@ use messaging::protocol::{ServerMsg};
 
 use crate::auth::auth_middleware::auth_middleware;
 use crate::auth::jwt_token::JwtKeys;
-use crate::auth::login::{create_login_handler, login_handler};
+use crate::auth::login::{create_login_handler, get_admin_hash, login_handler};
 use crate::logging::init_tracing;
 use crate::messaging::websocket::websocket_handler;
 
@@ -19,7 +19,8 @@ mod logging;
 struct AppState {
     db: database::StarChartDb,
     tx: broadcast::Sender<ServerMsg>,
-    jwt: JwtKeys
+    jwt: JwtKeys,
+    admin_hash: String
 }
 
 #[tokio::main]
@@ -31,11 +32,16 @@ async fn main() {
 
     let db = database::StarChartDb::connect().await;
 
+    let admin_hash = get_admin_hash()
+        .await
+        .expect("ADMIN_PASSWORD must be set and hashable");
+    
     let (tx, _) = broadcast::channel(50);
     let state = Arc::new(AppState {
         db,
         tx,
-        jwt: JwtKeys::from_env()
+        jwt: JwtKeys::from_env(),
+        admin_hash
     });
 
     let private_route = Router::new()

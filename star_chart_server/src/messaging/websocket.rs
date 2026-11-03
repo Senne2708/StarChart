@@ -4,12 +4,18 @@ use axum::{
     extract::{
         State, WebSocketUpgrade,
         ws::{Message, WebSocket},
-    }, response::IntoResponse,
+    },
+    response::IntoResponse,
 };
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
-    AppState, database::{AppDatabaseError, CreateActivity}, messaging::protocol::{ClientMsg, ClientMsgType, ServerMsg, ServerMsgType},
+    AppState,
+    database::CreateActivity,
+    messaging::{
+        error::{AppResult, ServerError},
+        protocol::{ClientMsg, ClientMsgType, ServerMsg, ServerMsgType},
+    },
 };
 
 async fn send_json(socket: &mut WebSocket, msg: &ServerMsg) -> Result<(), axum::Error> {
@@ -86,46 +92,44 @@ async fn process(state: &AppState, msg: ClientMsgType) -> ServerMsgType {
         ClientMsgType::GetActivities => handle_get_activities(state).await,
 
         // Changes
-        ClientMsgType::AddStudent { student_name, key_stage } => {
-            handle_add_student(state, student_name, key_stage ).await
-        }
+        ClientMsgType::AddStudent {
+            student_name,
+            key_stage,
+        } => handle_add_student(state, student_name, key_stage).await,
         ClientMsgType::AddActivity {
             student_id,
             teacher_id,
             reward_description,
             star_diff,
-        } => handle_add_activity(state, student_id, teacher_id, reward_description, star_diff).await,
+        } => {
+            handle_add_activity(state, student_id, teacher_id, reward_description, star_diff).await
+        }
     };
 
     result.unwrap_or_else(error_msg)
 }
 
-fn error_msg(err: AppDatabaseError) -> ServerMsgType {
-    let code = match &err {
-        AppDatabaseError::NotFound { .. } => "not_found",
-        AppDatabaseError::Internal(e) => {
-            tracing::error!(?e, "database error");
-            "internal_error"
-        }
-        AppDatabaseError::Temp{ .. } => "temp"
-    };
+fn error_msg(err: ServerError) -> ServerMsgType {
+    if err.is_internal() {
+        tracing::error!(?err, "request failed");
+    }
     ServerMsgType::Error {
-        code,
+        code: err.code(),
         message: err.client_message(),
     }
 }
 
-async fn handle_get_students(state: &AppState) -> Result<ServerMsgType, AppDatabaseError> {
+async fn handle_get_students(state: &AppState) -> AppResult<ServerMsgType> {
     let students = state.db.students.list().await?;
     Ok(ServerMsgType::Students(students))
 }
 
-async fn handle_get_teachers(state: &AppState) -> Result<ServerMsgType, AppDatabaseError> {
+async fn handle_get_teachers(state: &AppState) -> AppResult<ServerMsgType> {
     let teachers = state.db.teachers.list().await?;
     Ok(ServerMsgType::Teachers(teachers))
 }
 
-async fn handle_get_activities(state: &AppState) -> Result<ServerMsgType, AppDatabaseError> {
+async fn handle_get_activities(state: &AppState) -> AppResult<ServerMsgType> {
     let activities = state.db.activities.list().await?;
     Ok(ServerMsgType::Activities(activities))
 }
@@ -133,9 +137,23 @@ async fn handle_get_activities(state: &AppState) -> Result<ServerMsgType, AppDat
 async fn handle_add_student(
     state: &AppState,
     student_name: String,
-    key_stage: String
-) -> Result<ServerMsgType, AppDatabaseError> {
-    let student = state.db.students.create(&student_name, &key_stage).await?;
+    key_stage: String,
+) -> AppResult<ServerMsgType> {
+    let student_name = student_name.trim();
+    if student_name.is_empty() {
+        return Err(ServerError::Validation(
+            "student name must not be empty".to_string(),
+        ));
+    }
+
+    let key_stage = key_stage.trim().to_lowercase();
+    if !matches!(key_stage.as_str(), "ks3" | "ks4") {
+        return Err(ServerError::Validation(
+            "key_stage must be \"ks3\" or \"ks4\"".to_string(),
+        ));
+    }
+
+    let student = state.db.students.create(student_name, &key_stage).await?;
 
     send_broadcast(ServerMsgType::StudentAdded(student.clone()), state);
     Ok(ServerMsgType::StudentAdded(student))
@@ -147,7 +165,7 @@ async fn handle_add_activity(
     teacher_id: i64,
     reward_description: String,
     star_diff: i16,
-) -> Result<ServerMsgType, AppDatabaseError> {
+) -> AppResult<ServerMsgType> {
     let (activity, student) = state
         .db
         .activities
