@@ -1,5 +1,8 @@
+# Todo
 
+## Security
+- [ ] Add rate limiting on `/login` and `/create_login`.
 
-# Backend
-- Setup server
-- 
+## Backend
+- [ ] Add tests for the auth flow and WebSocket handlers.
+- [ ] Setup server
