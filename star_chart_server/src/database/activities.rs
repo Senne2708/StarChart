@@ -4,39 +4,16 @@ use sqlx::{FromRow, SqlitePool};
 use uuid::Uuid;
 
 use crate::database::error::AppDatabaseError;
-use crate::database::students::{Student, StudentRow};
+use crate::database::students::Student;
 
-#[derive(Serialize, Clone)]
-pub struct Activities {
+#[derive(Serialize, Clone, FromRow)]
+pub struct Activity {
     pub id: String,
     pub student_id: i64,
     pub teacher_id: i64,
     pub reward_description: String,
     pub star_diff: i16,
     pub timestamp: DateTime<Utc>,
-}
-
-#[derive(FromRow)]
-struct ActivitiesRow {
-    id: String,
-    student_id: i64,
-    teacher_id: i64,
-    reward_description: String,
-    star_diff: i16,
-    timestamp: DateTime<Utc>,
-}
-
-impl ActivitiesRow {
-    fn into_activities(self) -> Activities {
-        Activities {
-            id: self.id,
-            student_id: self.student_id,
-            teacher_id: self.teacher_id,
-            reward_description: self.reward_description,
-            star_diff: self.star_diff,
-            timestamp: self.timestamp,
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -57,33 +34,28 @@ impl ActivityService {
         Self { pool }
     }
 
-    pub async fn list(&self) -> Result<Vec<Activities>, AppDatabaseError> {
-        let rows = sqlx::query_as::<_, ActivitiesRow>(
+    pub async fn list(&self) -> Result<Vec<Activity>, AppDatabaseError> {
+        Ok(sqlx::query_as::<_, Activity>(
             "SELECT id, student_id, teacher_id, reward_description, star_diff, timestamp FROM activities ORDER BY timestamp DESC"
         )
         .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(ActivitiesRow::into_activities)
-            .collect())
+        .await?)
     }
 
-    pub async fn get(&self, id: &str) -> Result<Activities, AppDatabaseError> {
-        sqlx::query_as::<_, ActivitiesRow>(
+    pub async fn get(&self, id: &str) -> Result<Activity, AppDatabaseError> {
+        sqlx::query_as::<_, Activity>(
             "SELECT id, student_id, teacher_id, reward_description, star_diff, timestamp FROM activities WHERE id = ?"
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await?
-        .map(ActivitiesRow::into_activities)
         .ok_or_else(|| AppDatabaseError::not_found("activity", id.to_string()))
     }
 
     pub async fn create(
         &self,
         input: CreateActivity,
-    ) -> Result<(Activities, Student), AppDatabaseError> {
+    ) -> Result<(Activity, Student), AppDatabaseError> {
         let mut tx = self.pool.begin().await?;
 
         let teacher = sqlx::query("SELECT 1 FROM teachers WHERE id = ?")
@@ -97,18 +69,17 @@ impl ActivityService {
             ));
         }
 
-        let student = sqlx::query_as::<_, StudentRow>(
+        let student = sqlx::query_as::<_, Student>(
             "UPDATE students SET total_stars = total_stars + ? WHERE id = ?
-             RETURNING id, name, total_stars",
+             RETURNING id, name, ks, total_stars",
         )
         .bind(input.star_diff)
         .bind(input.student_id)
         .fetch_optional(&mut *tx)
         .await?
-        .map(StudentRow::into_student)
         .ok_or_else(|| AppDatabaseError::not_found("student", input.student_id.to_string()))?;
 
-        let activity = sqlx::query_as::<_, ActivitiesRow>(
+        let activity = sqlx::query_as::<_, Activity>(
             "INSERT INTO activities
                  (id, student_id, teacher_id, reward_description, star_diff, timestamp)
              VALUES (?, ?, ?, ?, ?, ?)
@@ -121,8 +92,7 @@ impl ActivityService {
         .bind(input.star_diff)
         .bind(Utc::now())
         .fetch_one(&mut *tx)
-        .await?
-        .into_activities();
+        .await?;
 
         tx.commit().await?;
         Ok((activity, student))

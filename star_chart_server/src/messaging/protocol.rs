@@ -1,17 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-use crate::database::{Activities, Student, Teacher};
+use crate::database::{Activity, Student, Teacher};
 
 // Client to Server
 
 #[derive(Deserialize)]
 pub struct ClientMsg {
     pub id: u64,
-    #[serde(flatten)]
     pub msg: ClientMsgType,
 }
 
-#[derive(Deserialize,Debug)]
+#[derive(Deserialize, Debug)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum ClientMsgType {
     GetTeachers,
@@ -26,7 +25,7 @@ pub enum ClientMsgType {
     },
     AddStudent {
         student_name: String,
-        key_stage: String
+        key_stage: String,
     },
 }
 
@@ -41,13 +40,20 @@ pub struct ServerMsg {
 #[derive(Serialize, Clone)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum ServerMsgType {
-    Error { code: &'static str, message: String },
+    Error {
+        code: &'static str,
+        message: String,
+    },
+    Ack,
 
     Students(Vec<Student>),
     Teachers(Vec<Teacher>),
-    Activities(Vec<Activities>),
+    Activities(Vec<Activity>),
 
     StudentAdded(Student),
 
-    ActivityAdded { activity: Activities, student: Student },
+    ActivityAdded {
+        activity: Activity,
+        student: Student,
+    },
 }

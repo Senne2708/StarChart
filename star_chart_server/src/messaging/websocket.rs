@@ -11,7 +11,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
     AppState,
-    database::CreateActivity,
+    database::{CreateActivity, KeyStage},
     messaging::{
         error::{AppResult, ServerError},
         protocol::{ClientMsg, ClientMsgType, ServerMsg, ServerMsgType},
@@ -27,7 +27,10 @@ pub async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    ws.on_failed_upgrade(|error| tracing::warn!("Error upgrading websocket: {error}"))
+    // Limiting message and frame size
+    ws.max_message_size(16 * 1024)
+        .max_frame_size(16 * 1024)
+        .on_failed_upgrade(|error| tracing::warn!("Error upgrading websocket: {error}"))
         .on_upgrade(move |socket| handle_socket(socket, state))
 }
 
@@ -146,17 +149,20 @@ async fn handle_add_student(
         ));
     }
 
-    let key_stage = key_stage.trim().to_lowercase();
-    if !matches!(key_stage.as_str(), "ks3" | "ks4") {
-        return Err(ServerError::Validation(
-            "key_stage must be \"ks3\" or \"ks4\"".to_string(),
-        ));
-    }
+    let key_stage = match key_stage.trim().to_lowercase().as_str() {
+        "ks3" => KeyStage::Ks3,
+        "ks4" => KeyStage::Ks4,
+        _ => {
+            return Err(ServerError::Validation(
+                "key_stage must be \"ks3\" or \"ks4\"".to_string(),
+            ));
+        }
+    };
 
-    let student = state.db.students.create(student_name, &key_stage).await?;
+    let student = state.db.students.create(student_name, key_stage).await?;
 
     send_broadcast(ServerMsgType::StudentAdded(student.clone()), state);
-    Ok(ServerMsgType::StudentAdded(student))
+    Ok(ServerMsgType::Ack)
 }
 
 async fn handle_add_activity(
@@ -184,5 +190,5 @@ async fn handle_add_activity(
         },
         state,
     );
-    Ok(ServerMsgType::ActivityAdded { activity, student })
+    Ok(ServerMsgType::Ack)
 }

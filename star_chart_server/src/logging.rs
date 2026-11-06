@@ -1,5 +1,8 @@
-use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_appender::{
+    non_blocking::WorkerGuard,
+    rolling::{RollingFileAppender, Rotation},
+};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub fn init_tracing() -> Option<WorkerGuard> {
     if cfg!(debug_assertions) {
@@ -20,7 +23,14 @@ pub fn init_tracing() -> Option<WorkerGuard> {
         let env_filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info"));
 
-        let file_appender = tracing_appender::rolling::daily("logs", "app.log");
+        // Only save logs from the last week
+        let file_appender = RollingFileAppender::builder()
+            .rotation(Rotation::DAILY)
+            .filename_prefix("app.log")
+            .max_log_files(7)
+            .build("logs")
+            .expect("failed to create log file appender");
+
         let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
 
         let file_layer = tracing_subscriber::fmt::layer()

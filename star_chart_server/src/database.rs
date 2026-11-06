@@ -2,16 +2,16 @@ mod activities;
 mod error;
 mod students;
 mod teachers;
- 
+
 use std::str::FromStr;
- 
+
 use axum::http::StatusCode;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::SqlitePool;
- 
-pub use activities::{Activities, ActivityService, CreateActivity};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+
+pub use activities::{Activity, ActivityService, CreateActivity};
 pub use error::AppDatabaseError;
-pub use students::{Student, StudentService};
+pub use students::{KeyStage, Student, StudentService};
 pub use teachers::{Teacher, TeacherService};
 
 pub fn db_error(e: AppDatabaseError) -> StatusCode {
@@ -32,7 +32,7 @@ impl StarChartDb {
             .create_if_missing(true)
             .foreign_keys(true)
             .journal_mode(SqliteJournalMode::Wal);
-        
+
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect_with(options)
