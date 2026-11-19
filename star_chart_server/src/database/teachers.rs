@@ -17,7 +17,7 @@ impl TeacherService {
         let rows = sqlx::query_as::<_, Teacher>("SELECT id, name FROM teachers ORDER BY id")
             .fetch_all(&self.pool)
             .await?;
-        Ok(rows.into_iter().collect())
+        Ok(rows)
     }
 
     pub async fn get(&self, id: i64) -> Result<Teacher, AppDatabaseError> {

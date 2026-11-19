@@ -1,0 +1,126 @@
+use std::time::Duration;
+
+use serde_json::{Value, json};
+
+use super::support::{ADMIN_CODE, TestServer};
+use crate::auth::rate_limit::RateLimiter;
+
+async fn create_login(server: &TestServer, username: &str, password: &str, admin_code: &str) -> u16 {
+    let body = json!({ "username": username, "password": password, "admin_code": admin_code });
+    server.post_json("/create_login", body).await.status().as_u16()
+}
+
+async fn login(server: &TestServer, username: &str, password: &str) -> reqwest::Response {
+    let body = json!({ "username": username, "password": password });
+    server.post_json("/login", body).await
+}
+
+#[tokio::test]
+async fn created_teacher_can_log_in_and_connect() {
+    let server = TestServer::start().await;
+    assert_eq!(create_login(&server, "teacher1", "password123", ADMIN_CODE).await, 201);
+
+    let response = login(&server, "teacher1", "password123").await;
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    let token = body["token"].as_str().expect("token should be a string");
+
+    // The token opens a WebSocket
+    server.connect(token).await;
+}
+
+#[tokio::test]
+async fn create_login_needs_the_admin_code() {
+    let server = TestServer::start().await;
+    assert_eq!(create_login(&server, "teacher1", "password123", "wrong").await, 401);
+    assert!(server.state.db.teachers.list().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn create_login_rejects_a_taken_username() {
+    let server = TestServer::start().await;
+    assert_eq!(create_login(&server, "teacher1", "password123", ADMIN_CODE).await, 201);
+    assert_eq!(create_login(&server, "teacher1", "other-password", ADMIN_CODE).await, 409);
+}
+
+#[tokio::test]
+async fn create_login_checks_username_and_password() {
+    let server = TestServer::start().await;
+    let long_name = "a".repeat(51);
+    let long_password = "a".repeat(129);
+
+    for (username, password) in [
+        ("", "password123"),
+        ("   ", "password123"),
+        (long_name.as_str(), "password123"),
+        ("teacher1", "short"),
+        ("teacher1", long_password.as_str()),
+    ] {
+        assert_eq!(
+            create_login(&server, username, password, ADMIN_CODE).await,
+            422,
+            "username {username:?}, password {password:?}"
+        );
+    }
+    assert!(server.state.db.teachers.list().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn usernames_are_trimmed() {
+    let server = TestServer::start().await;
+    assert_eq!(create_login(&server, "  teacher1  ", "password123", ADMIN_CODE).await, 201);
+
+    let teachers = server.state.db.teachers.list().await.unwrap();
+    assert_eq!(teachers[0].name, "teacher1");
+    assert_eq!(login(&server, " teacher1 ", "password123").await.status(), 200);
+}
+
+#[tokio::test]
+async fn login_rejects_wrong_password_and_unknown_user() {
+    let server = TestServer::start().await;
+    assert_eq!(create_login(&server, "teacher1", "password123", ADMIN_CODE).await, 201);
+
+    assert_eq!(login(&server, "teacher1", "wrong-password").await.status(), 401);
+    assert_eq!(login(&server, "nobody", "password123").await.status(), 401);
+}
+
+#[tokio::test]
+async fn login_attempts_are_rate_limited() {
+    // 2 attempts, one back every 30 seconds
+    let limit = RateLimiter::new(2, Duration::from_secs(60));
+    let server = TestServer::start_with_login_limit(limit).await;
+
+    assert_eq!(login(&server, "nobody", "password123").await.status(), 401);
+    assert_eq!(login(&server, "nobody", "password123").await.status(), 401);
+
+    let response = login(&server, "nobody", "password123").await;
+    assert_eq!(response.status(), 429);
+    let retry_after: u64 = response.headers()["retry-after"].to_str().unwrap().parse().unwrap();
+    assert!((1..=30).contains(&retry_after), "retry-after was {retry_after}");
+
+    // `/create_login` shares the same limit
+    assert_eq!(create_login(&server, "teacher1", "password123", ADMIN_CODE).await, 429);
+}
+
+#[tokio::test]
+async fn bad_request_bodies_are_rejected() {
+    let server = TestServer::start().await;
+
+    // No `Content-Type: application/json` header
+    let response = server.post_raw("/login", None, "{}").await;
+    assert_eq!(response.status(), 415);
+
+    // Not valid JSON
+    let response = server
+        .post_raw("/login", Some("application/json"), "{ not json")
+        .await;
+    assert_eq!(response.status(), 400);
+
+    // Valid JSON, but missing the password
+    let response = server.post_json("/login", json!({ "username": "teacher1" })).await;
+    assert_eq!(response.status(), 422);
+
+    // Larger than the 4 KiB limit
+    let response = login(&server, "teacher1", &"a".repeat(5000)).await;
+    assert_eq!(response.status(), 413);
+}

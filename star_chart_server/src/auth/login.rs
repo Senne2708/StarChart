@@ -10,7 +10,10 @@ use crate::{
         password::{hash_password, verify_password},
     },
     database::{AppDatabaseError, db_error},
-    messaging::error::{AppResult, ServerError},
+    messaging::{
+        error::{AppResult, ServerError},
+        validation::required_text,
+    },
 };
 
 #[derive(Deserialize)]
@@ -33,6 +36,14 @@ pub struct CreateLoginPayload {
 
 static DUMMY_HASH: LazyLock<String> =
     LazyLock::new(|| hash_password("dummy-password").expect("failed to hash dummy password"));
+
+/// Builds the dummy hash at startup, so the first unknown-username login doesn't
+/// hash on the async runtime or take longer than the others
+pub async fn init_dummy_hash() {
+    tokio::task::spawn_blocking(|| LazyLock::force(&DUMMY_HASH))
+        .await
+        .expect("failed to hash dummy password");
+}
 
 pub async fn get_admin_hash() -> AppResult<String> {
     let admin_password = match std::env::var("ADMIN_PASSWORD") {
@@ -60,10 +71,13 @@ pub async fn login_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<LoginPayload>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
+    // Usernames are stored trimmed
+    let username = payload.username.trim();
+
     let user = state
         .db
         .teachers
-        .get_password_hash(&payload.username)
+        .get_password_hash(username)
         .await
         .map_err(db_error)?;
 
@@ -87,7 +101,7 @@ pub async fn login_handler(
     }
 
     let token =
-        create_jwt(&state.jwt, &payload.username).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        create_jwt(&state.jwt, username).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(LoginResponse { token }))
 }
@@ -96,6 +110,14 @@ pub async fn create_login_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateLoginPayload>,
 ) -> Result<StatusCode, StatusCode> {
+    // Checked first, before the expensive admin code check
+    let username = required_text(&payload.username, "username", 50)
+        .map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)?
+        .to_string();
+    if !(8..=128).contains(&payload.password.chars().count()) {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
     let hash = state.admin_hash.clone();
     let password = payload.admin_code;
 
@@ -122,7 +144,7 @@ pub async fn create_login_handler(
     state
         .db
         .teachers
-        .create(&payload.username, &hashed_password)
+        .create(&username, &hashed_password)
         .await
         .map_err(|e| match e {
             AppDatabaseError::Conflict { .. } => StatusCode::CONFLICT,

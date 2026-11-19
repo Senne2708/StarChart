@@ -6,6 +6,23 @@ members = [
     "starChartFrontend/src-tauri",
 ]
 
+# Dependencies used by more than one crate, so they always share a version.
+# A crate opts in with `name = { workspace = true }`, and can add features on top.
+# Dependencies only one crate uses stay in that crate's Cargo.toml.
+[workspace.dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+futures-util = { version = "0.3.34", features = ["sink"] }
+reqwest = { version = "0.13.5", features = ["json"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sqlx = { version = "0.9", features = ["sqlite", "chrono"] }
+star_chart_protocol = { path = "star_chart_protocol" }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-tungstenite = "0.30.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+
 # Profiles are only read from the workspace root, they apply to every member.
 
 [profile.dev.package.argon2]

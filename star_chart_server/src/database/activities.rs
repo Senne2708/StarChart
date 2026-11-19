@@ -6,7 +6,6 @@ use uuid::Uuid;
 
 use crate::database::error::AppDatabaseError;
 
-#[derive(Deserialize)]
 pub struct CreateActivity {
     pub student_id: i64,
     pub teacher_id: i64,

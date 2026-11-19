@@ -15,6 +15,7 @@ use crate::{
     messaging::{
         error::{AppResult, ServerError},
         protocol::{ClientMsg, ClientMsgType, ErrorCode, KeyStage, ServerMsg, ServerMsgType},
+        validation::required_text,
     },
 };
 
@@ -40,6 +41,7 @@ pub fn send_broadcast(msg: ServerMsgType, state: &AppState) {
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let mut rx = state.tx.subscribe();
+    let mut shutdown = state.shutdown.clone();
 
     loop {
         tokio::select! {
@@ -79,9 +81,21 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    Err(RecvError::Lagged(_)) => continue,
+                    // Missed broadcasts, tell the client to re-fetch
+                    Err(RecvError::Lagged(_)) => {
+                        let resync = ServerMsg { id: None, msg: ServerMsgType::Resync };
+                        if send_json(&mut socket, &resync).await.is_err() {
+                            break;
+                        }
+                    }
                     Err(RecvError::Closed) => break,
                 }
+            }
+
+            // Close open sockets so graceful shutdown doesn't wait on them
+            _ = shutdown.changed() => {
+                let _ = socket.send(Message::Close(None)).await;
+                break;
             }
         }
     }
@@ -142,16 +156,11 @@ async fn handle_add_student(
     student_name: String,
     key_stage: KeyStage,
 ) -> AppResult<ServerMsgType> {
-    let student_name = student_name.trim();
-    if student_name.is_empty() {
-        return Err(ServerError::Validation(
-            "student name must not be empty".to_string(),
-        ));
-    }
+    let student_name = required_text(&student_name, "student name", 100)?;
 
     let student = state.db.students.create(student_name, key_stage).await?;
 
-    send_broadcast(ServerMsgType::StudentAdded(student.clone()), state);
+    send_broadcast(ServerMsgType::StudentAdded(student), state);
     Ok(ServerMsgType::Ack)
 }
 
@@ -162,23 +171,19 @@ async fn handle_add_activity(
     reward_description: String,
     star_diff: i16,
 ) -> AppResult<ServerMsgType> {
+    let reward_description = required_text(&reward_description, "reward description", 200)?;
+
     let (activity, student) = state
         .db
         .activities
         .create(CreateActivity {
             student_id,
             teacher_id,
-            reward_description,
+            reward_description: reward_description.to_string(),
             star_diff,
         })
         .await?;
 
-    send_broadcast(
-        ServerMsgType::ActivityAdded {
-            activity: activity.clone(),
-            student: student.clone(),
-        },
-        state,
-    );
+    send_broadcast(ServerMsgType::ActivityAdded { activity, student }, state);
     Ok(ServerMsgType::Ack)
 }

@@ -24,6 +24,9 @@ Both also return these errors for a bad request:
 | `413` | The body is larger than 4 KiB |
 | `415` | `Content-Type` is missing or not `application/json` |
 | `422` | The JSON is missing a field or has a field of the wrong type |
+| `429` | Too many attempts from this IP address. The `Retry-After` header says how many seconds to wait. |
+
+**Rate limit:** `/login` and `/create_login` share one limit per IP address: a burst of 5 attempts, then one more every 12 seconds. Every attempt counts, including successful ones. Refused requests are checked before the body is read, so they don't use any password hashing time.
 
 ### `POST /login`
 
@@ -67,9 +70,12 @@ The success response has an empty body. It does not return a token, so call `/lo
 | `201` | Account created |
 | `401` | Wrong admin code |
 | `409` | A teacher with that username already exists |
+| `422` | The username or password breaks the rules below (also returned for a missing field) |
 | `500` | Internal error (e.g. hashing or database failure) |
 
-The username and password are not checked for empty values or length.
+- `username` is trimmed, and must not be empty or longer than 50 characters. `/login` trims the username too.
+- `password` must be 8 to 128 characters. It is not trimmed.
+- These are checked before the admin code.
 
 ---
 
@@ -83,9 +89,9 @@ The username and password are not checked for empty values or length.
 Authorization: Bearer <jwt>
 ```
 
-A missing, malformed or expired token is rejected with `401` before the upgrade happens.
+A missing, malformed or expired token is rejected with `401` before the upgrade happens. The token is only checked then: a connection that is already open stays open after its token expires.
 
-> **Browser note:** the browser `WebSocket` constructor cannot set custom headers, so a browser client cannot currently authenticate against `/ws`. See [todo.md](todo.md).
+> **Browser note:** the browser `WebSocket` constructor cannot set custom headers, so a browser client cannot authenticate against `/ws`. The desktop app connects from its Rust code (`src-tauri`), which can set the header, and passes the data on to the React UI.
 
 **Limits:** a single WebSocket message or frame can be at most 16 KiB. Only text frames are handled. Binary frames are ignored, and get no reply.
 
@@ -110,14 +116,15 @@ Both directions use the same shape. A numeric `id` sits next to a `msg` object, 
 
 - For a reply, `id` echoes the `id` of the client message it answers.
 - For a broadcast, or a reply to a message that couldn't be parsed, `id` is `null`.
-- `data` is omitted when the message has no payload (`ack`).
+- `data` is omitted when the message has no payload (`ack`, `resync`).
 
 ### Request/reply and broadcast
 
 - **Every client message gets exactly one reply.** The reply is the requested data, an `ack`, or an `error`.
 - **Messages that change data reply with `ack`, then broadcast the change** to every connected client, including the sender, with `"id": null`. The sender gets the `ack` first, and the new data arrives in the broadcast.
 - If a message can't be parsed, the reply has `"id": null` and error code `bad_format`.
-- The broadcast buffer holds 50 messages. A client that falls further behind skips the missed broadcasts without any notice. Clients should re-fetch state (`get_students`, `get_activities`) after reconnecting.
+- The broadcast buffer holds 64 messages. A client that falls further behind skips the missed broadcasts and gets a `resync` message instead. On `resync`, and after reconnecting, clients should re-fetch state (`get_students`, `get_activities`).
+- When the server shuts down, it closes every open WebSocket with a close frame.
 
 ### Client messages
 
@@ -131,11 +138,12 @@ Both directions use the same shape. A numeric `id` sits next to a `msg` object, 
 
 **Validation**
 
-- `student_name` is trimmed and must not be empty.
-- `key_stage` is trimmed and lowercased, and must be `ks3` or `ks4`.
+- `student_name` is trimmed, and must not be empty or longer than 100 characters.
+- `reward_description` is trimmed, and must not be empty or longer than 200 characters.
+- `key_stage` must be exactly `"ks3"` or `"ks4"`, in lowercase. Anything else, including `"KS3"`, fails with `bad_format`.
 - `star_diff` is a signed 16-bit integer (−32768 to 32767). Use a positive value to award stars and a negative value to cash in a reward. A value outside that range fails with `bad_format`, not `invalid_input`.
 - `add_activity` fails with `not_found` if the teacher or student does not exist. The star total update and the activity record are written in one transaction.
-- `add_activity` does not check that `teacher_id` belongs to the logged-in teacher. It also doesn't stop a student's `total_stars` from going below zero, and it accepts an empty `reward_description`.
+- `add_activity` does not check that `teacher_id` belongs to the logged-in teacher. It also doesn't stop a student's `total_stars` from going below zero.
 
 **Examples**
 
@@ -158,6 +166,7 @@ Both directions use the same shape. A numeric `id` sits next to a `msg` object, 
 | `teachers` | `Teacher[]` (ordered by `id`) | reply to `get_teachers` |
 | `activities` | `Activity[]` (newest first) | reply to `get_activities` |
 | `ack` | none | reply to `add_student` and `add_activity` |
+| `resync` | none | sent with `"id": null` when the client missed broadcasts. Re-fetch state. |
 | `student_added` | `Student` | broadcast after `add_student` |
 | `activity_added` | `{ "activity": Activity, "student": Student }` | broadcast after `add_activity`. `student` carries the updated `total_stars`. |
 | `error` | `{ "code": string, "message": string }` | reply to any failed message |

@@ -84,6 +84,8 @@ pub enum ServerMsgType {
         message: String,
     },
     Ack,
+    /// Sent when the client fell behind and missed broadcasts, so it should re-fetch its state
+    Resync,
 
     Students(Vec<Student>),
     Teachers(Vec<Teacher>),

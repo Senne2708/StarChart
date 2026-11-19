@@ -38,10 +38,10 @@ impl AppDatabaseError {
 
 impl From<sqlx::Error> for AppDatabaseError {
     fn from(e: sqlx::Error) -> Self {
-        if let Some(db) = e.as_database_error() {
-            if db.is_unique_violation() {
-                return Self::Conflict { entity: "record" };
-            }
+        if let Some(db) = e.as_database_error()
+            && db.is_unique_violation()
+        {
+            return Self::Conflict { entity: "record" };
         }
         Self::Internal(e)
     }

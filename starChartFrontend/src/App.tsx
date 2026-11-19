@@ -4,14 +4,15 @@ import { AppShell, Group, UnstyledButton, Text, Title } from "@mantine/core";
 import HomePage from "./Pages/HomePage";
 import LeaderboardPage from "./Pages/LeaderboardPage";
 import StudentPage from "./Pages/StudentPage";
+import TestPage from "./Pages/TestPage";
 
-const PAGES = ["home", "leaderboard", "student"];
+const PAGES = ["home", "leaderboard", "student", "test"];
 
 const PAGE_EMOJIS: Record<string, string> = {
   home: "🏠",
   leaderboard: "🏆",
   student: "🎓",
-  
+  test: "🧪",
 };
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
     switch (activePage) {
       case "leaderboard": return <LeaderboardPage />;
       case "student": return <StudentPage />;
+      case "test": return <TestPage />;
       default: return <HomePage />;
     }
   };

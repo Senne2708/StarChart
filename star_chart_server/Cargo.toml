@@ -6,15 +6,21 @@ edition = "2024"
 [dependencies]
 argon2 = "0.6.0"
 axum = { version = "0.8.9", features = ["ws"] }
-chrono = { version = "0.4.45", features = ["serde"] }
+chrono = { workspace = true }
 jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
-sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "migrate", "chrono", "uuid"] }
-star_chart_protocol = { path = "../star_chart_protocol", features = ["sqlx"] }
-thiserror = "2.0.21"
-tokio = { version = "1.53.3", features = ["full"] }
-tracing = "0.1.44"
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true, features = ["runtime-tokio", "migrate", "uuid"] }
+star_chart_protocol = { workspace = true, features = ["sqlx"] }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 tracing-appender = "0.2.5"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+tracing-subscriber = { workspace = true }
 uuid = { version = "1", features = ["v7", "serde"] }
+
+# Only used by the tests, to talk to a running server like a real client
+[dev-dependencies]
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
