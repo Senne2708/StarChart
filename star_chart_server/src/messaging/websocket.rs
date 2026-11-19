@@ -11,10 +11,10 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
     AppState,
-    database::{CreateActivity, KeyStage},
+    database::CreateActivity,
     messaging::{
         error::{AppResult, ServerError},
-        protocol::{ClientMsg, ClientMsgType, ServerMsg, ServerMsgType},
+        protocol::{ClientMsg, ClientMsgType, ErrorCode, KeyStage, ServerMsg, ServerMsgType},
     },
 };
 
@@ -61,7 +61,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                     Err(err) => ServerMsg {
                         id: None,
                         msg: ServerMsgType::Error {
-                            code: "bad_format",
+                            code: ErrorCode::BadFormat,
                             message: err.to_string(),
                         },
                     },
@@ -140,7 +140,7 @@ async fn handle_get_activities(state: &AppState) -> AppResult<ServerMsgType> {
 async fn handle_add_student(
     state: &AppState,
     student_name: String,
-    key_stage: String,
+    key_stage: KeyStage,
 ) -> AppResult<ServerMsgType> {
     let student_name = student_name.trim();
     if student_name.is_empty() {
@@ -148,16 +148,6 @@ async fn handle_add_student(
             "student name must not be empty".to_string(),
         ));
     }
-
-    let key_stage = match key_stage.trim().to_lowercase().as_str() {
-        "ks3" => KeyStage::Ks3,
-        "ks4" => KeyStage::Ks4,
-        _ => {
-            return Err(ServerError::Validation(
-                "key_stage must be \"ks3\" or \"ks4\"".to_string(),
-            ));
-        }
-    };
 
     let student = state.db.students.create(student_name, key_stage).await?;
 

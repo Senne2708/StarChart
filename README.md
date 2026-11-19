@@ -15,18 +15,37 @@ The central server for a school reward system. Teachers log in and award stars t
 
 ## Getting Started
 
-### Run code
-To run backend run. Go to .../StarChart/star_chart 
+### Prerequisites
+
+- **Rust 1.85 or newer.** The server and protocol crates use edition 2024. Install it with [rustup](https://rustup.rs).
+- **Node.js and npm**, for the frontend.
+- **The Tauri system dependencies** for your OS: see [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+
+### Project layout
+
+The repo is a Cargo workspace with three crates:
+
+| Folder | What it is |
+| --- | --- |
+| `star_chart_server/` | The server (Axum + SQLite) |
+| `starChartFrontend/` | The desktop app (Tauri + React). Its Rust code is in `src-tauri/`. |
+| `star_chart_protocol/` | The message and data types shared by the server and the app |
+
+Every crate builds into one `target/` folder at the repo root. The build profiles are also set in the root `Cargo.toml`.
+
+### Running the server
+
+Run the server from the `star_chart_server` folder:
 
 ```bash
-cargo run               (debug)
-cargo run --release     (Runs optimised release build)
-cargo build             (Build)
+cd star_chart_server
+cargo run               # debug build
+cargo run --release     # optimised release build
 ```
 
 The server listens on `127.0.0.1:3000`. Only connections from the same machine can reach it.
 
-The SQLite database `app.db` is created in the current working directory if it doesn't exist. Migrations are compiled into the binary and run on startup.
+The SQLite database `app.db` is created in the current working directory if it doesn't exist. Migrations are compiled into the binary and run on startup. You can also run `cargo run -p star_chart_server` from the repo root, but that creates a separate `app.db` and `logs/` folder there.
 
 ### Configuration
 
@@ -57,6 +76,30 @@ No accounts exist at first. Create one with the admin code:
 curl -i -X POST http://127.0.0.1:3000/create_login \
   -H 'Content-Type: application/json' \
   -d '{"username":"teacher1","password":"...","admin_code":"debug_password"}'
+```
+
+### Running the app
+
+Start the server first. Then, in a second terminal:
+
+```bash
+cd starChartFrontend
+npm install             # first time only
+npm run tauri dev       # build and open the app in development mode
+```
+
+`tauri dev` starts the Vite dev server on `localhost:1420` and shows it in the app window. React changes reload instantly. Changes to the Rust code in `src-tauri/` rebuild and restart the app.
+
+To build an installable app, run `npm run tauri build`. The installers are written to `target/release/bundle/` at the repo root.
+
+### Checking the whole workspace
+
+From the repo root:
+
+```bash
+cargo check --workspace     # type-check every crate
+cargo build --workspace     # build every crate
+cargo clippy --workspace    # lint every crate
 ```
 
 ## Data Model

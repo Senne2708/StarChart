@@ -1,20 +1,10 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqlitePool};
+use chrono::Utc;
+use serde::Deserialize;
+use sqlx::SqlitePool;
+use star_chart_protocol::{Activity, Student};
 use uuid::Uuid;
 
 use crate::database::error::AppDatabaseError;
-use crate::database::students::Student;
-
-#[derive(Serialize, Clone, FromRow)]
-pub struct Activity {
-    pub id: String,
-    pub student_id: i64,
-    pub teacher_id: i64,
-    pub reward_description: String,
-    pub star_diff: i16,
-    pub timestamp: DateTime<Utc>,
-}
 
 #[derive(Deserialize)]
 pub struct CreateActivity {

@@ -9,10 +9,10 @@ use axum::http::StatusCode;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 
-pub use activities::{Activity, ActivityService, CreateActivity};
+pub use activities::{ActivityService, CreateActivity};
 pub use error::AppDatabaseError;
-pub use students::{KeyStage, Student, StudentService};
-pub use teachers::{Teacher, TeacherService};
+pub use students::StudentService;
+pub use teachers::TeacherService;
 
 pub fn db_error(e: AppDatabaseError) -> StatusCode {
     tracing::error!(?e, "database error");

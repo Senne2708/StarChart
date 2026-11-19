@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::database::AppDatabaseError;
+use crate::{database::AppDatabaseError, messaging::protocol::ErrorCode};
 
 #[derive(Error, Debug)]
 pub enum ServerError {
@@ -18,12 +18,12 @@ pub enum ServerError {
 }
 
 impl ServerError {
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> ErrorCode {
         match self {
-            ServerError::Validation(_) => "invalid_input",
-            ServerError::Database(AppDatabaseError::NotFound { .. }) => "not_found",
-            ServerError::Database(AppDatabaseError::Conflict { .. }) => "conflict",
-            _ => "internal_error",
+            ServerError::Validation(_) => ErrorCode::InvalidInput,
+            ServerError::Database(AppDatabaseError::NotFound { .. }) => ErrorCode::NotFound,
+            ServerError::Database(AppDatabaseError::Conflict { .. }) => ErrorCode::Conflict,
+            _ => ErrorCode::InternalError,
         }
     }
 
@@ -36,7 +36,7 @@ impl ServerError {
     }
 
     pub fn is_internal(&self) -> bool {
-        self.code() == "internal_error"
+        self.code() == ErrorCode::InternalError
     }
 }
 

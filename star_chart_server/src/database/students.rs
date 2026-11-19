@@ -1,23 +1,7 @@
-use serde::Serialize;
-use sqlx::{FromRow, SqlitePool};
+use sqlx::SqlitePool;
+use star_chart_protocol::{KeyStage, Student};
 
 use crate::database::error::AppDatabaseError;
-
-#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq, sqlx::Type)]
-#[serde(rename_all = "lowercase")]
-#[sqlx(rename_all = "lowercase")]
-pub enum KeyStage {
-    Ks3,
-    Ks4,
-}
-
-#[derive(Serialize, Clone, FromRow)]
-pub struct Student {
-    pub id: i64,
-    pub name: String,
-    pub ks: KeyStage,
-    pub total_stars: i64,
-}
 
 #[derive(Clone)]
 pub struct StudentService {

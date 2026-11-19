@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = [
+    "star_chart_protocol",
+    "star_chart_server",
+    "starChartFrontend/src-tauri",
+]
+
+# Profiles are only read from the workspace root, they apply to every member.
+
+[profile.dev.package.argon2]
+opt-level = 3
+
+# From the Tauri size guide: https://tauri.app/concept/size/#cargo-configuration
+# `panic = "abort"` is left out on purpose, it would make any panic in a server
+# task take down the whole server instead of just that connection.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

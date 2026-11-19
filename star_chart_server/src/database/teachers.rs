@@ -1,13 +1,7 @@
-use serde::Serialize;
-use sqlx::{FromRow, SqlitePool};
+use sqlx::SqlitePool;
+use star_chart_protocol::Teacher;
 
 use crate::database::error::AppDatabaseError;
-
-#[derive(Serialize, Clone, FromRow)]
-pub struct Teacher {
-    pub id: i64,
-    pub name: String,
-}
 
 #[derive(Clone)]
 pub struct TeacherService {

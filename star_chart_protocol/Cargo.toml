@@ -1,0 +1,13 @@
+[package]
+name = "star_chart_protocol"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+sqlx = { version = "0.9", optional = true, features = ["sqlite", "chrono"] }
+
+[features]
+# Adds the sqlx derives so the server can read these types straight from the database
+sqlx = ["dep:sqlx"]
