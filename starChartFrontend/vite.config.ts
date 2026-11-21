@@ -16,6 +16,27 @@ export default defineConfig(() => ({
   server: {
     port: 1420,
     strictPort: true,
+        proxy: {
+      // HTTP login routes → Rust server (avoids CORS in dev)
+      "/login": "http://127.0.0.1:3000",
+      "/create_login": "http://127.0.0.1:3000",
+
+      // WebSocket → Rust server. Browsers can't set headers on a WebSocket,
+      // so we pass the token as ?token=... and the proxy turns it into
+      // the "Authorization: Bearer ..." header the server expects. /
+      // /claude used for this part
+      "/ws": {
+        target: "ws://127.0.0.1:3000",
+        ws: true,
+        configure: (proxy) => {
+          proxy.on("proxyReqWs", (proxyReq : any, req : any) => {
+            const url = new URL(req.url ?? "", "http://localhost");
+            const token = url.searchParams.get("token");
+            if (token) proxyReq.setHeader("Authorization", `Bearer ${token}`);
+          });
+        },
+      },
+    },
     host: host || false,
     hmr: host
       ? {
