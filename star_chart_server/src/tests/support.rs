@@ -20,12 +20,22 @@ use crate::{
     auth::{
         jwt_token::{JwtKeys, create_jwt},
         password::hash_password,
-        rate_limit::RateLimiter,
+        rate_limit::{LoginLimits, RateLimiter},
     },
     database::StarChartDb,
 };
 
 pub const ADMIN_CODE: &str = "test-admin-code";
+
+/// Limits high enough that tests never hit them. Tests about rate limiting
+/// replace the one they check.
+pub fn generous_limits() -> LoginLimits {
+    LoginLimits {
+        per_ip: RateLimiter::new(1000, Duration::from_secs(60)),
+        password_failures: RateLimiter::new(1000, Duration::from_secs(60)),
+        admin_code_failures: RateLimiter::new(1000, Duration::from_secs(60)),
+    }
+}
 
 /// A running server with a fresh database
 pub struct TestServer {
@@ -36,12 +46,11 @@ pub struct TestServer {
 }
 
 impl TestServer {
-    /// A server whose login rate limit is high enough that tests never hit it
     pub async fn start() -> Self {
-        Self::start_with_login_limit(RateLimiter::new(1000, Duration::from_secs(60))).await
+        Self::start_with_limits(generous_limits()).await
     }
 
-    pub async fn start_with_login_limit(login_limit: RateLimiter) -> Self {
+    pub async fn start_with_limits(login_limits: LoginLimits) -> Self {
         let (tx, _) = broadcast::channel(64);
         let (shutdown_tx, shutdown) = watch::channel(());
 
@@ -51,7 +60,7 @@ impl TestServer {
             jwt: JwtKeys::from_secret(b"test-secret-that-is-at-least-32-chars"),
             admin_hash: hash_password(ADMIN_CODE).unwrap(),
             hash_limit: Semaphore::new(1),
-            login_limit,
+            login_limits,
             shutdown,
         });
 
@@ -79,6 +88,22 @@ impl TestServer {
     pub async fn post_json(&self, path: &str, body: Value) -> reqwest::Response {
         self.http
             .post(self.url(path))
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+    }
+
+    /// Posts JSON as if through a reverse proxy, for a client at `client_ip`
+    pub async fn post_json_forwarded_for(
+        &self,
+        path: &str,
+        body: Value,
+        client_ip: &str,
+    ) -> reqwest::Response {
+        self.http
+            .post(self.url(path))
+            .header("x-forwarded-for", client_ip)
             .json(&body)
             .send()
             .await

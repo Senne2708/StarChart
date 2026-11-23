@@ -3,7 +3,7 @@
 Roughly in the order to do them.
 
 ## Server
-- [ ] Behind a reverse proxy (see Deployment), every request comes from the proxy's address, so the rate limit would need to read `X-Forwarded-For` instead.
+- [x] Read the client address from `X-Forwarded-For` behind the reverse proxy, and limit wrong passwords per username and wrong admin codes per server.
 
 ## Desktop app (Tauri, `src-tauri/`)
 - [x] `error.rs`, `auth.rs`, `server.rs`, `state.rs`, `commands.rs`: log in, open the WebSocket, one command per message, broadcasts sent to the UI as events.
@@ -23,6 +23,5 @@ Roughly in the order to do them.
 - [ ] Replace the Tauri template names (`productName`, `identifier`, Cargo `description` and `authors`).
 
 ## Deployment
-- [ ] Set up the server: environment variables for the bind address, database path and log folder.
-- [ ] TLS, through a reverse proxy or `rustls`.
-- [ ] Run it as a service, with database backups.
+See [deployment.md](deployment.md). No code changes are needed: systemd's `WorkingDirectory` sets where the database and logs go, and Caddy handles TLS.
+- [ ] Set up the VPS, Caddy, the systemd service and nightly backups.

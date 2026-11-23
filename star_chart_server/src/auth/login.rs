@@ -1,6 +1,14 @@
-use std::sync::{Arc, LazyLock};
+use std::{
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -8,6 +16,7 @@ use crate::{
     auth::{
         jwt_token::create_jwt,
         password::{hash_password, verify_password},
+        rate_limit::too_many_requests,
     },
     database::{AppDatabaseError, db_error},
     messaging::{
@@ -32,6 +41,27 @@ pub struct CreateLoginPayload {
     username: String,
     password: String,
     admin_code: String,
+}
+
+/// A failed `/login` or `/create_login`: a plain status, or a 429 that says how long to wait
+pub enum AuthError {
+    Status(StatusCode),
+    TooManyRequests(Duration),
+}
+
+impl From<StatusCode> for AuthError {
+    fn from(status: StatusCode) -> Self {
+        Self::Status(status)
+    }
+}
+
+impl IntoResponse for AuthError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Status(status) => status.into_response(),
+            Self::TooManyRequests(wait) => too_many_requests(wait),
+        }
+    }
 }
 
 static DUMMY_HASH: LazyLock<String> =
@@ -70,9 +100,17 @@ pub async fn get_admin_hash() -> AppResult<String> {
 pub async fn login_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<LoginPayload>,
-) -> Result<Json<LoginResponse>, StatusCode> {
+) -> Result<Json<LoginResponse>, AuthError> {
     // Usernames are stored trimmed
     let username = payload.username.trim();
+
+    // Every attempt counts as a failure until the password turns out to be right.
+    // Counting before checking means guesses sent in parallel can't get past the limit.
+    // Unknown usernames are counted too, so a 429 doesn't reveal which ones exist.
+    let failures = &state.login_limits.password_failures;
+    failures
+        .check(username.to_string())
+        .map_err(AuthError::TooManyRequests)?;
 
     let user = state
         .db
@@ -97,8 +135,9 @@ pub async fn login_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !(user_exists && password_ok) {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
+    failures.refund(&username.to_string());
 
     let token =
         create_jwt(&state.jwt, username).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -109,14 +148,19 @@ pub async fn login_handler(
 pub async fn create_login_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateLoginPayload>,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<StatusCode, AuthError> {
     // Checked first, before the expensive admin code check
     let username = required_text(&payload.username, "username", 50)
         .map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)?
         .to_string();
     if !(8..=128).contains(&payload.password.chars().count()) {
-        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+        return Err(StatusCode::UNPROCESSABLE_ENTITY.into());
     }
+
+    // Counted for the whole server, like wrong passwords above, so spreading
+    // guesses over many addresses doesn't help
+    let failures = &state.login_limits.admin_code_failures;
+    failures.check(()).map_err(AuthError::TooManyRequests)?;
 
     let hash = state.admin_hash.clone();
     let password = payload.admin_code;
@@ -133,8 +177,9 @@ pub async fn create_login_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !password_ok {
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(StatusCode::UNAUTHORIZED.into());
     }
+    failures.refund(&());
 
     let hashed_password = tokio::task::spawn_blocking(move || hash_password(&payload.password))
         .await

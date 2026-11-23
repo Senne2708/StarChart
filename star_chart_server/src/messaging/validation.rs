@@ -4,7 +4,9 @@ use crate::messaging::error::{AppResult, ServerError};
 pub fn required_text<'a>(value: &'a str, field: &str, max: usize) -> AppResult<&'a str> {
     let value = value.trim();
     if value.is_empty() {
-        return Err(ServerError::Validation(format!("{field} must not be empty")));
+        return Err(ServerError::Validation(format!(
+            "{field} must not be empty"
+        )));
     }
     if value.chars().count() > max {
         return Err(ServerError::Validation(format!(

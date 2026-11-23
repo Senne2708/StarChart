@@ -115,4 +115,5 @@ Foreign keys are enforced. See `star_chart_server/migrations/` for the exact sch
 ## Documentation
 
 - [API reference](docs/api.md): HTTP endpoints and the WebSocket protocol
+- [Deployment](docs/deployment.md): running the server on a VPS with HTTPS, backups and rate limits
 - [Todo](docs/todo.md)

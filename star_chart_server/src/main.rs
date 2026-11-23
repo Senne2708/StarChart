@@ -11,7 +11,7 @@ use tokio::sync::{Semaphore, broadcast, watch};
 use crate::auth::auth_middleware::auth_middleware;
 use crate::auth::jwt_token::JwtKeys;
 use crate::auth::login::{create_login_handler, get_admin_hash, init_dummy_hash, login_handler};
-use crate::auth::rate_limit::{RateLimiter, login_rate_limit};
+use crate::auth::rate_limit::{LoginLimits, RateLimiter, login_rate_limit};
 use crate::logging::init_tracing;
 use crate::messaging::websocket::websocket_handler;
 
@@ -28,13 +28,18 @@ struct AppState {
     jwt: JwtKeys,
     admin_hash: String,
     hash_limit: Semaphore,
-    login_limit: RateLimiter,
+    login_limits: LoginLimits,
     shutdown: watch::Receiver<()>,
 }
 
-/// `/login` and `/create_login` attempts each IP address gets in a burst.
-/// They refill one at a time over a minute, so 5 means one every 12 seconds.
-const LOGIN_ATTEMPTS_PER_MINUTE: u32 = 5;
+/// `/login` and `/create_login` requests per client address per minute. Loose,
+/// because a whole school usually shares one address. It only stops floods.
+const REQUESTS_PER_IP_PER_MINUTE: u32 = 30;
+
+/// Wrong passwords per username, and wrong admin codes in total, allowed in a
+/// burst. They come back one at a time over `FAILURE_WINDOW`.
+const MAX_FAILURES: u32 = 5;
+const FAILURE_WINDOW: Duration = Duration::from_secs(15 * 60);
 
 /// Password hashes allowed to run at once. Each one uses ~19 MiB of RAM and a
 /// full core, and the server runs on a single core, so more would only queue.
@@ -109,7 +114,11 @@ async fn main() {
 
     let (tx, _) = broadcast::channel(64);
     let hash_limit = Semaphore::new(MAX_CONCURRENT_HASHES);
-    let login_limit = RateLimiter::new(LOGIN_ATTEMPTS_PER_MINUTE, Duration::from_secs(60));
+    let login_limits = LoginLimits {
+        per_ip: RateLimiter::new(REQUESTS_PER_IP_PER_MINUTE, Duration::from_secs(60)),
+        password_failures: RateLimiter::new(MAX_FAILURES, FAILURE_WINDOW),
+        admin_code_failures: RateLimiter::new(MAX_FAILURES, FAILURE_WINDOW),
+    };
     let (shutdown_tx, shutdown) = watch::channel(());
 
     let state = Arc::new(AppState {
@@ -118,7 +127,7 @@ async fn main() {
         jwt: JwtKeys::from_env(),
         admin_hash,
         hash_limit,
-        login_limit,
+        login_limits,
         shutdown,
     });
 

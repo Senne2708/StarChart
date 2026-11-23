@@ -1,13 +1,14 @@
 use std::{
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    hash::Hash,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -16,10 +17,24 @@ use crate::AppState;
 
 const MAX_TRACKED: usize = 10_000;
 
-pub struct RateLimiter {
+/// The limits on `/login` and `/create_login`.
+///
+/// A school usually reaches the internet through one shared address, so the
+/// per-address limit is loose and only stops floods. The strict limits count
+/// wrong passwords per username, and wrong admin codes for the whole server.
+pub struct LoginLimits {
+    /// Every request, per client address
+    pub per_ip: RateLimiter<IpAddr>,
+    /// Wrong passwords, per username
+    pub password_failures: RateLimiter<String>,
+    /// Wrong admin codes, for the whole server
+    pub admin_code_failures: RateLimiter<()>,
+}
+
+pub struct RateLimiter<K> {
     capacity: f64,
     per_second: f64,
-    buckets: Mutex<HashMap<IpAddr, Bucket>>,
+    buckets: Mutex<HashMap<K, Bucket>>,
 }
 
 struct Bucket {
@@ -27,7 +42,7 @@ struct Bucket {
     updated: Instant,
 }
 
-impl RateLimiter {
+impl<K: Eq + Hash> RateLimiter<K> {
     pub fn new(capacity: u32, refill_time: Duration) -> Self {
         Self {
             capacity: capacity as f64,
@@ -36,15 +51,23 @@ impl RateLimiter {
         }
     }
 
-    /// Uses up one attempt for `ip`. If none are left, returns how long until the next one.
-    pub fn check(&self, ip: IpAddr) -> Result<(), Duration> {
-        self.check_at(ip, Instant::now())
+    /// Uses up one attempt for `key`. If none are left, returns how long until the next one.
+    pub fn check(&self, key: K) -> Result<(), Duration> {
+        self.check_at(key, Instant::now())
     }
 
-    fn check_at(&self, ip: IpAddr, now: Instant) -> Result<(), Duration> {
+    /// Gives back an attempt taken by `check`, e.g. once a password turns out to be right
+    pub fn refund(&self, key: &K) {
+        let mut buckets = self.buckets.lock().unwrap();
+        if let Some(bucket) = buckets.get_mut(key) {
+            bucket.tokens = (bucket.tokens + 1.0).min(self.capacity);
+        }
+    }
+
+    fn check_at(&self, key: K, now: Instant) -> Result<(), Duration> {
         let mut buckets = self.buckets.lock().unwrap();
 
-        if buckets.len() >= MAX_TRACKED && !buckets.contains_key(&ip) {
+        if buckets.len() >= MAX_TRACKED && !buckets.contains_key(&key) {
             // A full bucket is the same as no bucket, so those can go
             buckets.retain(|_, bucket| self.refill(bucket, now) < self.capacity);
             if buckets.len() >= MAX_TRACKED {
@@ -52,7 +75,7 @@ impl RateLimiter {
             }
         }
 
-        let bucket = buckets.entry(ip).or_insert(Bucket {
+        let bucket = buckets.entry(key).or_insert(Bucket {
             tokens: self.capacity,
             updated: now,
         });
@@ -75,24 +98,57 @@ impl RateLimiter {
     }
 }
 
-/// Refuses a request with `429 Too Many Requests` once its address has no attempts left.
+/// The client address to rate limit by.
+///
+/// Behind a reverse proxy, every connection comes from the proxy on this machine,
+/// and the proxy puts the real client address last in `X-Forwarded-For`. That
+/// header is only trusted on connections from loopback: anyone else could put any
+/// address in it to dodge the limit.
+pub fn client_ip(peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
+    let ip = if peer.ip().is_loopback() {
+        headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|value| value.split(','))
+            .last()
+            .and_then(|last| last.trim().parse().ok())
+            .unwrap_or(peer.ip())
+    } else {
+        peer.ip()
+    };
+
+    // An IPv6 user usually has a whole /64 block of addresses, so count the block as one
+    match ip {
+        IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & (u128::MAX << 64))),
+        v4 => v4,
+    }
+}
+
+/// A `429 Too Many Requests` reply, with `Retry-After` in whole seconds
+pub fn too_many_requests(wait: Duration) -> Response {
+    let retry_after = (wait.as_secs_f64().ceil() as u64).to_string();
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::RETRY_AFTER, retry_after)],
+    )
+        .into_response()
+}
+
+/// Refuses a request once its address has no attempts left.
 /// It runs before the body is read or a password is hashed, so a refused request is cheap.
 pub async fn login_rate_limit(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
 ) -> Response {
-    match state.login_limit.check(addr.ip()) {
+    let ip = client_ip(peer, request.headers());
+    match state.login_limits.per_ip.check(ip) {
         Ok(()) => next.run(request).await,
         Err(wait) => {
-            tracing::warn!(ip = %addr.ip(), "login rate limit reached");
-            let retry_after = (wait.as_secs_f64().ceil() as u64).to_string();
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                [(header::RETRY_AFTER, retry_after)],
-            )
-                .into_response()
+            tracing::warn!(%ip, "login rate limit reached");
+            too_many_requests(wait)
         }
     }
 }
@@ -100,6 +156,8 @@ pub async fn login_rate_limit(
 #[cfg(test)]
 mod tests {
     use std::net::Ipv4Addr;
+
+    use axum::http::HeaderValue;
 
     use super::*;
 
@@ -147,12 +205,56 @@ mod tests {
     }
 
     #[test]
-    fn addresses_are_limited_separately() {
+    fn keys_are_limited_separately() {
         let limiter = RateLimiter::new(1, Duration::from_secs(60));
         let now = Instant::now();
 
         assert!(limiter.check_at(IP, now).is_ok());
         assert!(limiter.check_at(IP, now).is_err());
         assert!(limiter.check_at(OTHER_IP, now).is_ok());
+    }
+
+    #[test]
+    fn refund_gives_an_attempt_back() {
+        let limiter = RateLimiter::new(1, Duration::from_secs(60));
+        let now = Instant::now();
+
+        limiter.check_at("teacher1".to_string(), now).unwrap();
+        limiter.refund(&"teacher1".to_string());
+        assert!(limiter.check_at("teacher1".to_string(), now).is_ok());
+    }
+
+    fn forwarded_for(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_str(value).unwrap());
+        headers
+    }
+
+    #[test]
+    fn uses_forwarded_for_from_a_local_proxy() {
+        let proxy: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+
+        // The proxy adds the real address last, anything before it came from the client
+        let headers = forwarded_for("1.2.3.4, 81.2.69.160");
+        assert_eq!(client_ip(proxy, &headers), "81.2.69.160".parse::<IpAddr>().unwrap());
+
+        // No header, e.g. in development without a proxy
+        assert_eq!(client_ip(proxy, &HeaderMap::new()), proxy.ip());
+    }
+
+    #[test]
+    fn ignores_forwarded_for_from_anyone_else() {
+        let client: SocketAddr = "81.2.69.160:50000".parse().unwrap();
+        let headers = forwarded_for("10.9.9.9");
+
+        assert_eq!(client_ip(client, &headers), client.ip());
+    }
+
+    #[test]
+    fn counts_an_ipv6_block_as_one_address() {
+        let a: SocketAddr = "[2001:db8:1:2::1]:50000".parse().unwrap();
+        let b: SocketAddr = "[2001:db8:1:2:ffff::9]:50000".parse().unwrap();
+
+        assert_eq!(client_ip(a, &HeaderMap::new()), client_ip(b, &HeaderMap::new()));
     }
 }

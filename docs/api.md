@@ -24,9 +24,13 @@ Both also return these errors for a bad request:
 | `413` | The body is larger than 4 KiB |
 | `415` | `Content-Type` is missing or not `application/json` |
 | `422` | The JSON is missing a field or has a field of the wrong type |
-| `429` | Too many attempts from this IP address. The `Retry-After` header says how many seconds to wait. |
+| `429` | Too many attempts, see below. The `Retry-After` header says how many seconds to wait. |
 
-**Rate limit:** `/login` and `/create_login` share one limit per IP address: a burst of 5 attempts, then one more every 12 seconds. Every attempt counts, including successful ones. Refused requests are checked before the body is read, so they don't use any password hashing time.
+**Rate limits** (defaults, set in `star_chart_server/src/main.rs`):
+
+- **Per client address:** 30 requests a minute, shared by both endpoints. It is checked before the body is read, so refused requests cost almost nothing. Behind a reverse proxy, the address comes from `X-Forwarded-For` (see [deployment.md](deployment.md)).
+- **Wrong passwords, per username:** 5, then one more every 3 minutes. A correct login doesn't count. Once the limit is reached, `/login` returns `429` for that username even with the right password. Unknown usernames are limited the same way, so a `429` doesn't show whether a username exists.
+- **Wrong admin codes, for the whole server:** 5, then one more every 3 minutes. Once reached, `/create_login` returns `429` even with the right code.
 
 ### `POST /login`
 
