@@ -21,6 +21,7 @@ impl ServerError {
     pub fn code(&self) -> ErrorCode {
         match self {
             ServerError::Validation(_) => ErrorCode::InvalidInput,
+            ServerError::Database(AppDatabaseError::NotEnoughStars { .. }) => ErrorCode::InvalidInput,
             ServerError::Database(AppDatabaseError::NotFound { .. }) => ErrorCode::NotFound,
             ServerError::Database(AppDatabaseError::Conflict { .. }) => ErrorCode::Conflict,
             _ => ErrorCode::InternalError,

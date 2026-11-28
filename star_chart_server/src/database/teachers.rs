@@ -28,6 +28,15 @@ impl TeacherService {
             .ok_or_else(|| AppDatabaseError::not_found("teacher", id.to_string()))
     }
 
+    /// The teacher with this login username, if there is one
+    pub async fn get_by_name(&self, name: &str) -> Result<Option<Teacher>, AppDatabaseError> {
+        sqlx::query_as::<_, Teacher>("SELECT id, name FROM teachers WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn create(
         &self,
         name: &str,

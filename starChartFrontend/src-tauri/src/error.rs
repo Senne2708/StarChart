@@ -19,6 +19,9 @@ pub enum AppError {
     #[error("username must be 1-50 characters and password 8-128 characters")]
     InvalidAccount,
 
+    #[error("the server address must start with https:// so passwords are sent securely")]
+    InsecureServer,
+
     #[error("could not reach the server: {0}")]
     Http(#[from] reqwest::Error),
 
@@ -54,6 +57,7 @@ impl AppError {
             Self::BadAdminCode => "bad_admin_code",
             Self::UsernameTaken => "username_taken",
             Self::InvalidAccount => "invalid_account",
+            Self::InsecureServer => "insecure_server",
             Self::Http(_) => "http",
             Self::WebSocket(_) => "websocket",
             Self::Disconnected => "disconnected",

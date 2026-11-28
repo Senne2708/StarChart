@@ -93,7 +93,7 @@ The success response has an empty body. It does not return a token, so call `/lo
 Authorization: Bearer <jwt>
 ```
 
-A missing, malformed or expired token is rejected with `401` before the upgrade happens. The token is only checked then: a connection that is already open stays open after its token expires.
+A missing, malformed or expired token is rejected with `401` before the upgrade happens, and so is a valid token for a teacher who no longer exists. The teacher named in the token is remembered for the whole connection, and every change made on it is recorded under that teacher. The token is only checked then: a connection that is already open stays open after its token expires.
 
 > **Browser note:** the browser `WebSocket` constructor cannot set custom headers, so a browser client cannot authenticate against `/ws`. The desktop app connects from its Rust code (`src-tauri`), which can set the header, and passes the data on to the React UI.
 
@@ -138,16 +138,27 @@ Both directions use the same shape. A numeric `id` sits next to a `msg` object, 
 | `get_teachers` | none | `teachers` | no |
 | `get_activities` | none | `activities` | no |
 | `add_student` | `{ "student_name": string, "key_stage": "ks3" \| "ks4" }` | `ack` | `student_added` |
-| `add_activity` | `{ "student_id": int, "teacher_id": int, "reward_description": string, "star_diff": int }` | `ack` | `activity_added` |
+| `add_activity` | `{ "student_id": int, "reward_description": string, "star_diff": int, "kind": "reward" \| "take_away" \| "cash_in", "subject": Subject }` | `ack` | `activity_added` |
+| `remove_activity` | `{ "activity_id": string }` | `ack` | `activity_removed` |
+| `remove_student` | `{ "student_id": int }` | `ack` | `student_removed` |
 
 **Validation**
 
 - `student_name` is trimmed, and must not be empty or longer than 100 characters.
 - `reward_description` is trimmed, and must not be empty or longer than 200 characters.
 - `key_stage` must be exactly `"ks3"` or `"ks4"`, in lowercase. Anything else, including `"KS3"`, fails with `bad_format`.
-- `star_diff` is a signed 16-bit integer (−32768 to 32767). Use a positive value to award stars and a negative value to cash in a reward. A value outside that range fails with `bad_format`, not `invalid_input`.
-- `add_activity` fails with `not_found` if the teacher or student does not exist. The star total update and the activity record are written in one transaction.
-- `add_activity` does not check that `teacher_id` belongs to the logged-in teacher. It also doesn't stop a student's `total_stars` from going below zero.
+- `kind` says what the change is for, and must match the sign of `star_diff`:
+  - `reward`: `star_diff` from 1 to 100.
+  - `take_away` (e.g. for behaviour) or `cash_in` (spent on a reward): `star_diff` from −1 to −100.
+  - Anything else fails with `invalid_input`. An unknown `kind` string fails with `bad_format`.
+- `star_diff` must fit in a signed 16-bit integer (−32768 to 32767). A value outside that range fails with `bad_format`, not `invalid_input`.
+- `subject` is the class the stars belong to (see **Subject** below). An unknown or missing `subject` fails with `bad_format`.
+- Balances are kept per class. A change that would take the student's balance in that class below zero fails with `invalid_input` (e.g. `"student 3 doesn't have enough Art stars"`), and nothing is written. Stars in one class can't be spent in another.
+- `add_activity` is always recorded under the logged-in teacher, taken from the login token when the WebSocket opened. Clients can't choose the teacher; a `teacher_id` field in the message is ignored.
+- `add_activity` fails with `not_found` if the student does not exist.
+- `remove_activity` deletes the activity, which undoes its `star_diff`. It fails with `invalid_input` if that would take the student's balance in that class below zero (e.g. removing a Maths reward whose stars were cashed in afterwards), and with `not_found` for an unknown id.
+- `remove_student` permanently deletes the student and all of their activities. It fails with `not_found` for an unknown id.
+- Any logged-in teacher can remove any activity or student.
 
 **Examples**
 
@@ -158,8 +169,9 @@ Both directions use the same shape. A numeric `id` sits next to a `msg` object, 
   "data": { "student_name": "Alex Smith", "key_stage": "ks3" } } }
 
 { "id": 3, "msg": { "type": "add_activity",
-  "data": { "student_id": 1, "teacher_id": 1,
-            "reward_description": "Great homework", "star_diff": 2 } } }
+  "data": { "student_id": 1,
+            "reward_description": "Great homework", "star_diff": 2,
+            "kind": "reward", "subject": "maths" } } }
 ```
 
 ### Server messages
@@ -169,10 +181,12 @@ Both directions use the same shape. A numeric `id` sits next to a `msg` object, 
 | `students` | `Student[]` (ordered by `id`) | reply to `get_students` |
 | `teachers` | `Teacher[]` (ordered by `id`) | reply to `get_teachers` |
 | `activities` | `Activity[]` (newest first) | reply to `get_activities` |
-| `ack` | none | reply to `add_student` and `add_activity` |
+| `ack` | none | reply to any message that changes data |
 | `resync` | none | sent with `"id": null` when the client missed broadcasts. Re-fetch state. |
 | `student_added` | `Student` | broadcast after `add_student` |
-| `activity_added` | `{ "activity": Activity, "student": Student }` | broadcast after `add_activity`. `student` carries the updated `total_stars`. |
+| `activity_added` | `{ "activity": Activity, "student": Student }` | broadcast after `add_activity`. `student` carries the updated `balances` and `earned_stars`. |
+| `activity_removed` | `{ "activity_id": string, "student": Student }` | broadcast after `remove_activity`. `student` carries the updated `balances` and `earned_stars`. |
+| `student_removed` | `{ "student_id": int }` | broadcast after `remove_student`. Clients should also drop that student's activities. |
 | `error` | `{ "code": string, "message": string }` | reply to any failed message |
 
 **Examples**
@@ -180,7 +194,10 @@ Both directions use the same shape. A numeric `id` sits next to a `msg` object, 
 ```json
 // Reply to get_students
 { "id": 1, "msg": { "type": "students", "data": [
-  { "id": 1, "name": "Alex Smith", "ks": "ks3", "total_stars": 12 }
+  { "id": 1, "name": "Alex Smith", "ks": "ks3",
+    "balances": { "art": 2, "ilp": 0, "maths": 5, "english": 1,
+                  "humanities": 0, "citizenship": 3, "vocational": 0, "options": 1 },
+    "earned_stars": 15 }
 ] } }
 
 // Reply to add_activity
@@ -194,9 +211,14 @@ Both directions use the same shape. A numeric `id` sits next to a `msg` object, 
     "teacher_id": 1,
     "reward_description": "Great homework",
     "star_diff": 2,
-    "timestamp": "2026-11-05T21:07:00.123456Z"
+    "timestamp": "2026-11-05T21:07:00.123456Z",
+    "kind": "reward",
+    "subject": "maths"
   },
-  "student": { "id": 1, "name": "Alex Smith", "ks": "ks3", "total_stars": 14 }
+  "student": { "id": 1, "name": "Alex Smith", "ks": "ks3",
+    "balances": { "art": 2, "ilp": 0, "maths": 7, "english": 1,
+                  "humanities": 0, "citizenship": 3, "vocational": 0, "options": 1 },
+    "earned_stars": 17 }
 } } }
 
 // Error reply
@@ -213,7 +235,14 @@ Both directions use the same shape. A numeric `id` sits next to a `msg` object, 
 | `id` | integer | Auto-incremented |
 | `name` | string | Not unique |
 | `ks` | `"ks3"` \| `"ks4"` | Key stage |
-| `total_stars` | integer | Running total (64-bit signed). Starts at 0. |
+| `balances` | object, `Subject` → integer | Stars left to spend in each class: awarded − taken away − cashed in. Always has every class, 0 if none. Never negative. |
+| `earned_stars` | integer | Awarded − taken away, across all classes. Cash-ins don't lower it. The leaderboard ranks by this. |
+
+Both are worked out from the student's activities, not stored separately, so removing an activity updates them too.
+
+**Subject**
+
+The classes every student takes, the same for KS3 and KS4: `"art"`, `"ilp"`, `"maths"`, `"english"`, `"humanities"`, `"citizenship"`, `"vocational"`, `"options"`.
 
 **Teacher**
 
@@ -230,8 +259,10 @@ Both directions use the same shape. A numeric `id` sits next to a `msg` object, 
 | `student_id` | integer | |
 | `teacher_id` | integer | |
 | `reward_description` | string | |
-| `star_diff` | integer | 16-bit signed. Positive = awarded, negative = cashed in |
+| `star_diff` | integer | 16-bit signed. Positive = awarded, negative = taken away or cashed in |
 | `timestamp` | string | RFC 3339, UTC |
+| `kind` | `"reward"` \| `"take_away"` \| `"cash_in"` | |
+| `subject` | `Subject` | The class the stars belong to |
 
 ### Error codes
 

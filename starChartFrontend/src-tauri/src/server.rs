@@ -25,7 +25,8 @@ use tokio_tungstenite::{
 
 use crate::error::{AppError, AppResult};
 
-/// Event the React UI listens for: every broadcast (`student_added`, `activity_added`, `resync`)
+/// Event the React UI listens for: every broadcast (`student_added`, `activity_added`,
+/// `activity_removed`, `student_removed`, `resync`)
 pub const SERVER_EVENT: &str = "server-event";
 /// Event sent when the connection drops without the user logging out
 pub const DISCONNECTED_EVENT: &str = "server-disconnected";

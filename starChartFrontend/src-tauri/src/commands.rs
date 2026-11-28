@@ -4,7 +4,9 @@
 //! checks the reply is the expected type. Tauri renames the arguments to
 //! camelCase for JavaScript, so `student_name` is passed as `studentName`.
 
-use star_chart_protocol::{Activity, ClientMsgType, KeyStage, ServerMsgType, Student, Teacher};
+use star_chart_protocol::{
+    Activity, ActivityKind, ClientMsgType, KeyStage, ServerMsgType, Student, Subject, Teacher,
+};
 use tauri::{AppHandle, State};
 
 use crate::{
@@ -31,6 +33,7 @@ pub async fn create_login(
     password: String,
     admin_code: String,
 ) -> AppResult<()> {
+    state.ensure_secure_server()?;
     auth::create_login(&state.http, &state.server_url, &username, &password, &admin_code).await
 }
 
@@ -41,6 +44,7 @@ pub async fn login(
     username: String,
     password: String,
 ) -> AppResult<()> {
+    state.ensure_secure_server()?;
     let token = auth::login(&state.http, &state.server_url, &username, &password).await?;
     let connection = ServerConnection::connect(&state.ws_url(), &token, app).await?;
     state.set_connection(Some(connection)).await;
@@ -98,15 +102,28 @@ pub async fn add_student(
 pub async fn add_activity(
     state: State<'_, AppState>,
     student_id: i64,
-    teacher_id: i64,
     reward_description: String,
     star_diff: i16,
+    kind: ActivityKind,
+    subject: Subject,
 ) -> AppResult<()> {
+    // The server records it under the logged-in teacher
     let msg = ClientMsgType::AddActivity {
         student_id,
-        teacher_id,
         reward_description,
         star_diff,
+        kind,
+        subject,
     };
     expect_ack(state.request(msg).await?)
+}
+
+#[tauri::command]
+pub async fn remove_activity(state: State<'_, AppState>, activity_id: String) -> AppResult<()> {
+    expect_ack(state.request(ClientMsgType::RemoveActivity { activity_id }).await?)
+}
+
+#[tauri::command]
+pub async fn remove_student(state: State<'_, AppState>, student_id: i64) -> AppResult<()> {
+    expect_ack(state.request(ClientMsgType::RemoveStudent { student_id }).await?)
 }

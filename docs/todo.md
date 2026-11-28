@@ -3,6 +3,7 @@
 Roughly in the order to do them.
 
 ## Server
+- [x] Take the teacher for `add_activity` from the login token instead of the message.
 - [x] Read the client address from `X-Forwarded-For` behind the reverse proxy, and limit wrong passwords per username and wrong admin codes per server.
 
 ## Desktop app (Tauri, `src-tauri/`)
@@ -10,7 +11,7 @@ Roughly in the order to do them.
 - [x] Server URL set with `STAR_CHART_SERVER` (defaults to `http://127.0.0.1:3000`).
 - [ ] A settings screen for the server URL, instead of an environment variable.
 - [ ] Move `LoginPayload`/`LoginResponse` into `star_chart_protocol`, so the server and the app share them.
-- [ ] Enable a TLS feature on `tokio-tungstenite` (e.g. `rustls-tls-webpki-roots`) before using `wss://`.
+- [x] Enable TLS on `tokio-tungstenite` (`native-tls`) so `wss://` works. Release builds refuse plain `http://` except to localhost.
 
 ## Frontend (React)
 - [ ] Move `jotai` from the root `package.json` into `starChartFrontend/package.json`, and delete the root one.
@@ -19,7 +20,7 @@ Roughly in the order to do them.
 - [ ] Replace the mock data with live data. The leaderboard +/- buttons should send `add_activity` with a reward description.
 - [ ] Handle `student_added`, `activity_added` and `resync`.
 - [ ] Hide the delete-student button until the server supports it.
-- [ ] Set a Content Security Policy in `tauri.conf.json` (it is `null`).
+- [x] Set a Content Security Policy in `tauri.conf.json`.
 - [ ] Replace the Tauri template names (`productName`, `identifier`, Cargo `description` and `authors`).
 
 ## Deployment

@@ -1,21 +1,26 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension,
     extract::{
         State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    response::IntoResponse,
+    http::StatusCode,
+    response::Response,
 };
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
     AppState,
-    database::CreateActivity,
+    auth::jwt_token::Claims,
+    database::{CreateActivity, db_error},
     messaging::{
         error::{AppResult, ServerError},
-        protocol::{ClientMsg, ClientMsgType, ErrorCode, KeyStage, ServerMsg, ServerMsgType},
-        validation::required_text,
+        protocol::{
+            ActivityKind, ClientMsg, ClientMsgType, ErrorCode, KeyStage, ServerMsg, ServerMsgType,
+        },
+        validation::{required_text, validate_star_change},
     },
 };
 
@@ -24,22 +29,40 @@ async fn send_json(socket: &mut WebSocket, msg: &ServerMsg) -> Result<(), axum::
     socket.send(Message::Text(text.into())).await
 }
 
+/// Who is on the other end of a WebSocket. Set once, from the login token, when it opens.
+struct Session {
+    teacher_id: i64,
+}
+
+/// Opens a WebSocket for the teacher named in the login token. `auth_middleware` has
+/// already checked the token. Refuses with `401` if that teacher no longer exists.
 pub async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+    Extension(claims): Extension<Claims>,
+) -> Result<Response, StatusCode> {
+    let teacher = state
+        .db
+        .teachers
+        .get_by_name(&claims.sub)
+        .await
+        .map_err(db_error)?
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let session = Session { teacher_id: teacher.id };
+
     // Limiting message and frame size
-    ws.max_message_size(16 * 1024)
+    Ok(ws
+        .max_message_size(16 * 1024)
         .max_frame_size(16 * 1024)
         .on_failed_upgrade(|error| tracing::warn!("Error upgrading websocket: {error}"))
-        .on_upgrade(move |socket| handle_socket(socket, state))
+        .on_upgrade(move |socket| handle_socket(socket, state, session)))
 }
 
 pub fn send_broadcast(msg: ServerMsgType, state: &AppState) {
     let _ = state.tx.send(ServerMsg { id: None, msg });
 }
 
-async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
+async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, session: Session) {
     let mut rx = state.tx.subscribe();
     let mut shutdown = state.shutdown.clone();
 
@@ -58,7 +81,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 let reply = match serde_json::from_str::<ClientMsg>(&text) {
                     Ok(ClientMsg { id, msg }) => ServerMsg {
                         id: Some(id),
-                        msg: process(&state, msg).await,
+                        msg: process(&state, &session, msg).await,
                     },
                     Err(err) => ServerMsg {
                         id: None,
@@ -101,7 +124,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     }
 }
 
-async fn process(state: &AppState, msg: ClientMsgType) -> ServerMsgType {
+async fn process(state: &AppState, session: &Session, msg: ClientMsgType) -> ServerMsgType {
     let result = match msg {
         // Gets
         ClientMsgType::GetStudents => handle_get_students(state).await,
@@ -115,11 +138,29 @@ async fn process(state: &AppState, msg: ClientMsgType) -> ServerMsgType {
         } => handle_add_student(state, student_name, key_stage).await,
         ClientMsgType::AddActivity {
             student_id,
-            teacher_id,
             reward_description,
             star_diff,
+            kind,
+            subject,
         } => {
-            handle_add_activity(state, student_id, teacher_id, reward_description, star_diff).await
+            let input = CreateActivity {
+                student_id,
+                // Always the logged-in teacher, never something the client chose
+                teacher_id: session.teacher_id,
+                reward_description,
+                star_diff,
+                kind,
+                subject,
+            };
+            handle_add_activity(state, input).await
+        }
+
+        // Removals
+        ClientMsgType::RemoveActivity { activity_id } => {
+            handle_remove_activity(state, activity_id).await
+        }
+        ClientMsgType::RemoveStudent { student_id } => {
+            handle_remove_student(state, student_id).await
         }
     };
 
@@ -166,24 +207,31 @@ async fn handle_add_student(
 
 async fn handle_add_activity(
     state: &AppState,
-    student_id: i64,
-    teacher_id: i64,
-    reward_description: String,
-    star_diff: i16,
+    mut input: CreateActivity,
 ) -> AppResult<ServerMsgType> {
-    let reward_description = required_text(&reward_description, "reward description", 200)?;
+    validate_star_change(input.kind, input.star_diff)?;
+    let field = match input.kind {
+        ActivityKind::CashIn => "reward",
+        ActivityKind::Reward | ActivityKind::TakeAway => "reason",
+    };
+    input.reward_description = required_text(&input.reward_description, field, 200)?.to_string();
 
-    let (activity, student) = state
-        .db
-        .activities
-        .create(CreateActivity {
-            student_id,
-            teacher_id,
-            reward_description: reward_description.to_string(),
-            star_diff,
-        })
-        .await?;
+    let (activity, student) = state.db.activities.create(input).await?;
 
     send_broadcast(ServerMsgType::ActivityAdded { activity, student }, state);
+    Ok(ServerMsgType::Ack)
+}
+
+async fn handle_remove_activity(state: &AppState, activity_id: String) -> AppResult<ServerMsgType> {
+    let student = state.db.activities.remove(&activity_id).await?;
+
+    send_broadcast(ServerMsgType::ActivityRemoved { activity_id, student }, state);
+    Ok(ServerMsgType::Ack)
+}
+
+async fn handle_remove_student(state: &AppState, student_id: i64) -> AppResult<ServerMsgType> {
+    state.db.students.remove(student_id).await?;
+
+    send_broadcast(ServerMsgType::StudentRemoved { student_id }, state);
     Ok(ServerMsgType::Ack)
 }

@@ -1,3 +1,4 @@
+use star_chart_protocol::Subject;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -7,6 +8,9 @@ pub enum AppDatabaseError {
 
     #[error("{entity} already exists")]
     Conflict { entity: &'static str },
+
+    #[error("student {student_id} doesn't have enough {} stars", subject.label())]
+    NotEnoughStars { student_id: i64, subject: Subject },
 
     #[error("database error: {0}")]
     Internal(#[source] sqlx::Error),
@@ -24,6 +28,7 @@ impl AppDatabaseError {
         match self {
             Self::NotFound { entity, id } => format!("{entity} {id} not found"),
             Self::Conflict { entity } => format!("{entity} already exists"),
+            Self::NotEnoughStars { .. } => self.to_string(),
             Self::Internal(_) => "internal error".to_string(),
         }
     }

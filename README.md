@@ -106,11 +106,13 @@ cargo clippy --workspace    # lint every crate
 
 | Table | Columns |
 | --- | --- |
-| `students` | `id` (auto-increment), `name`, `ks` (`ks3` or `ks4`), `total_stars` (default 0) |
+| `students` | `id` (auto-increment), `name`, `ks` (`ks3` or `ks4`) |
 | `teachers` | `id` (auto-increment), `name` (unique, used as the login username), `hashed_password` |
-| `activities` | `id` (UUID v7), `student_id` → `students`, `teacher_id` → `teachers`, `reward_description`, `star_diff`, `timestamp` (UTC) |
+| `activities` | `id` (UUID v7), `student_id` → `students`, `teacher_id` → `teachers`, `reward_description`, `star_diff`, `timestamp` (UTC), `kind` (`reward`, `take_away` or `cash_in`), `subject` (the class: `art`, `ilp`, `maths`, `english`, `humanities`, `citizenship`, `vocational` or `options`) |
 
 Foreign keys are enforced. See `star_chart_server/migrations/` for the exact schema.
+
+Star totals aren't stored. Each student's balance per class and their earned total are added up from their activities when they're loaded, so they can't drift out of step.
 
 ## Documentation
 
